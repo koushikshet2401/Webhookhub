@@ -1,0 +1,189 @@
+// WebhookHub - Prisma Schema (MySQL)
+// Two domains in one schema:
+//   1. Webhook delivery: Project -> ApiKey, Endpoint, Event, Delivery, DeliveryAttemptLog
+//   2. Generic queue engine ledger: Job (durable history layer on top of BullMQ/Redis,
+//      since Redis job state can expire/be evicted - this table is the system of record)
+//
+// Run after setting DATABASE_URL in .env:
+//   npx prisma generate
+//   npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  DEVELOPER
+  VIEWER
+}
+
+enum DeliveryStatus {
+  PENDING
+  DELIVERING
+  SUCCESS
+  FAILED
+  DEAD_LETTERED
+}
+
+enum JobStatus {
+  WAITING
+  ACTIVE
+  COMPLETED
+  FAILED
+  DEAD_LETTERED
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(DEVELOPER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  auditLogs    AuditLog[]
+
+  @@map("users")
+}
+
+model Project {
+  id        Int      @id @default(autoincrement())
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  apiKeys   ApiKey[]
+  endpoints Endpoint[]
+  events    Event[]
+
+  @@map("projects")
+}
+
+model ApiKey {
+  id         Int       @id @default(autoincrement())
+  projectId  Int
+  prefix     String    // shown in UI, e.g. "wh_live_8f2a"
+  keyHash    String    // bcrypt hash of the actual secret, never store plaintext
+  label      String?
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("api_keys")
+}
+
+model Endpoint {
+  id         Int      @id @default(autoincrement())
+  projectId  Int
+  url        String
+  description String?
+  secret     String   // used to HMAC-sign outgoing payloads; encrypt at rest
+  eventTypes String   @db.Text // JSON array of subscribed event types, "*" = all
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  deliveries Delivery[]
+
+  @@map("endpoints")
+}
+
+model Event {
+  id        Int      @id @default(autoincrement())
+  projectId Int
+  eventType String
+  payload   String   @db.LongText // JSON payload to deliver
+  sourceIp  String?
+  createdAt DateTime @default(now())
+
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  deliveries Delivery[]
+
+  @@map("events")
+}
+
+model Delivery {
+  id              Int             @id @default(autoincrement())
+  eventId         Int
+  endpointId      Int
+  status          DeliveryStatus  @default(PENDING)
+  attemptCount    Int             @default(0)
+  maxAttempts     Int             @default(8)
+  lastAttemptAt   DateTime?
+  nextAttemptAt   DateTime?
+  responseStatusCode Int?
+  responseBody    String?         @db.Text
+  latencyMs       Int?
+  deadLetteredAt  DateTime?
+  createdAt       DateTime        @default(now())
+
+  event           Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  endpoint        Endpoint        @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  attemptLogs     DeliveryAttemptLog[]
+
+  @@index([status])
+  @@map("deliveries")
+}
+
+model DeliveryAttemptLog {
+  id              Int      @id @default(autoincrement())
+  deliveryId      Int
+  attemptNumber   Int
+  responseStatusCode Int?
+  responseBody    String?  @db.Text
+  errorMessage    String?  @db.Text
+  durationMs      Int?
+  attemptedAt     DateTime @default(now())
+
+  delivery        Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@map("delivery_attempt_logs")
+}
+
+// Durable ledger for the generic queue engine. BullMQ/Redis holds the live
+// working set; this table is the system of record once Redis evicts a job
+// (Redis retention is for speed, not history - this is what dashboards/
+// analytics query against).
+model Job {
+  id          Int       @id @default(autoincrement())
+  queueName   String
+  bullJobId   String?
+  type        String    // e.g. "webhook_delivery"
+  payload     String    @db.LongText
+  status      JobStatus @default(WAITING)
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(8)
+  lastError   String?   @db.Text
+  nextRunAt   DateTime?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([status])
+  @@map("jobs")
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  action     String
+  targetType String?
+  targetId   Int?
+  metadata   String?  @db.Text
+  createdAt  DateTime @default(now())
+
+  user       User?    @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
