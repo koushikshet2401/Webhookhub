@@ -1,3 +1,5 @@
+// backend/src/server.js
+
 require('dotenv').config();
 const http = require('http');
 const express = require('express');
@@ -8,6 +10,9 @@ const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 
 const healthRoutes = require('./routes/health.routes');
+const authRoutes = require('./routes/auth.routes');
+const projectRoutes = require('./routes/project.routes');
+const userRoutes = require('./routes/user.routes');
 const { initSocket } = require('./sockets');
 require('./queues/webhookQueue'); // boots the queue + worker + queueEvents listeners
 
@@ -35,9 +40,21 @@ app.use(limiter);
 
 // ---- Routes ----
 app.use('/api/health', healthRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/projects', projectRoutes);
+app.use('/api/users', userRoutes);
 
 app.get('/', (req, res) => {
   res.send('WebhookHub backend is running.');
+});
+
+// ---- Global error handler (must come after all routes) ----
+app.use((err, req, res, next) => {
+  console.error('[error]', err);
+  const status = err.status || 500;
+  res.status(status).json({
+    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
+  });
 });
 
 // ---- Socket.IO ----
