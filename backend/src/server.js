@@ -17,6 +17,9 @@ const apiKeyRoutes = require('./routes/apiKey.routes');
 const apiKeyItemRoutes = require('./routes/apiKey.item.routes');
 const endpointRoutes = require('./routes/endpoint.routes');
 const endpointItemRoutes = require('./routes/endpoint.item.routes');
+const eventRoutes = require('./routes/event.routes');
+const deliveryRoutes = require('./routes/delivery.routes');
+const deliveryItemRoutes = require('./routes/delivery.item.routes');
 const { initSocket } = require('./sockets');
 require('./queues/webhookQueue'); // boots the queue + worker + queueEvents listeners
 
@@ -51,6 +54,9 @@ app.use('/api/projects/:projectId/api-keys', apiKeyRoutes);
 app.use('/api/api-keys', apiKeyItemRoutes);
 app.use('/api/projects/:projectId/endpoints', endpointRoutes);
 app.use('/api/endpoints', endpointItemRoutes);
+app.use('/api/events', eventRoutes);
+app.use('/api/projects/:projectId/deliveries', deliveryRoutes);
+app.use('/api/deliveries', deliveryItemRoutes);
 
 app.get('/', (req, res) => {
   res.send('WebhookHub backend is running.');

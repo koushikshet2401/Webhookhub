@@ -3,29 +3,33 @@
 const crypto = require('crypto');
 const prisma = require('../config/db');
 const { logAction } = require('../utils/audit');
+const { encrypt } = require('../utils/crypto');
 
 function generateEndpointSecret() {
   return `whsec_${crypto.randomBytes(24).toString('hex')}`;
+}
+
+// Strip the secret out of anything we send back to the dashboard - it's only
+// ever shown once, at creation, exactly like an API key.
+function toPublicEndpoint(endpoint) {
+  const { secret, ...rest } = endpoint;
+  return { ...rest, eventTypes: JSON.parse(rest.eventTypes) };
 }
 
 async function createEndpoint(req, res) {
   const projectId = Number(req.params.projectId);
   const { url, description, eventTypes } = req.body;
 
-  if (!url || !/^https?:\/\//i.test(url)) {
-    return res.status(400).json({ error: 'A valid http(s) url is required' });
-  }
-
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const secret = generateEndpointSecret();
+  const plainSecret = generateEndpointSecret();
   const endpoint = await prisma.endpoint.create({
     data: {
       projectId,
       url,
       description: description || null,
-      secret, // TODO (Section 5): encrypt at rest with ENV_ENCRYPTION_KEY
+      secret: encrypt(plainSecret), // encrypted at rest with ENV_ENCRYPTION_KEY
       eventTypes: JSON.stringify(eventTypes && eventTypes.length ? eventTypes : ['*']),
     },
   });
@@ -38,7 +42,11 @@ async function createEndpoint(req, res) {
     metadata: { projectId },
   });
 
-  return res.status(201).json({ ...endpoint, eventTypes: JSON.parse(endpoint.eventTypes) });
+  return res.status(201).json({
+    ...toPublicEndpoint(endpoint),
+    secret: plainSecret,
+    warning: 'Save this secret now - it will not be shown again. Use it to verify the X-WebhookHub-Signature header.',
+  });
 }
 
 async function listEndpoints(req, res) {
@@ -47,14 +55,14 @@ async function listEndpoints(req, res) {
     where: { projectId },
     orderBy: { createdAt: 'desc' },
   });
-  return res.json(endpoints.map((e) => ({ ...e, eventTypes: JSON.parse(e.eventTypes) })));
+  return res.json(endpoints.map(toPublicEndpoint));
 }
 
 async function getEndpoint(req, res) {
   const id = Number(req.params.id);
   const endpoint = await prisma.endpoint.findUnique({ where: { id } });
   if (!endpoint) return res.status(404).json({ error: 'Endpoint not found' });
-  return res.json({ ...endpoint, eventTypes: JSON.parse(endpoint.eventTypes) });
+  return res.json(toPublicEndpoint(endpoint));
 }
 
 async function updateEndpoint(req, res) {
@@ -63,10 +71,6 @@ async function updateEndpoint(req, res) {
 
   const existing = await prisma.endpoint.findUnique({ where: { id } });
   if (!existing) return res.status(404).json({ error: 'Endpoint not found' });
-
-  if (url && !/^https?:\/\//i.test(url)) {
-    return res.status(400).json({ error: 'A valid http(s) url is required' });
-  }
 
   const endpoint = await prisma.endpoint.update({
     where: { id },
@@ -86,7 +90,7 @@ async function updateEndpoint(req, res) {
     metadata: req.body,
   });
 
-  return res.json({ ...endpoint, eventTypes: JSON.parse(endpoint.eventTypes) });
+  return res.json(toPublicEndpoint(endpoint));
 }
 
 async function deleteEndpoint(req, res) {
