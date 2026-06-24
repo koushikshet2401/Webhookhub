@@ -28,7 +28,7 @@ async function ingestEvent(req, res) {
   const deliveries = [];
   for (const endpoint of subscribed) {
     const delivery = await prisma.delivery.create({
-      data: { eventId: event.id, endpointId: endpoint.id, status: 'PENDING' },
+      data: { eventId: event.id, endpointId: endpoint.id, status: 'PENDING', maxAttempts: endpoint.maxRetries },
     });
 
     await enqueueDelivery({
@@ -38,6 +38,8 @@ async function ingestEvent(req, res) {
       secret: decrypt(endpoint.secret), // decrypted only at the moment it's needed to sign
       eventType,
       payload,
+      maxRetries: endpoint.maxRetries,
+      retryBackoffMs: endpoint.retryBackoffMs,
     });
 
     deliveries.push({ deliveryId: delivery.id, endpointId: endpoint.id });
