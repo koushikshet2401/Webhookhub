@@ -55,7 +55,12 @@ const limiter = rateLimit({
   windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
   max: Number(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
 });
-app.use(limiter);
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/events')) {
+    return next();
+  }
+  return limiter(req, res, next);
+});
 
 // ---- Routes ----
 app.use('/api/health', healthRoutes);
@@ -87,7 +92,7 @@ app.use((err, req, res, next) => {
 initSocket(server);
 
 // ---- Start server ----
-const PORT = process.env.PORT || 6000;
+const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
   logger.info('WebhookHub backend listening', { port: PORT, env: process.env.NODE_ENV });
 });

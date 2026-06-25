@@ -91,4 +91,67 @@ function fakeRes() {
   };
 }
 
-module.exports = { withMockDb, freshRequire, createMockDb, fakeRes, dbPath, redisPath };
+/**
+ * Generic version of withMockDb for any module - used to mock axios (so
+ * worker tests don't make real network calls) and urlSafety (so worker
+ * tests aren't subject to the real SSRF check, which has its own dedicated
+ * test file and would otherwise reject every test fixture URL).
+ */
+async function withMockModule(modulePath, mockExports, fn) {
+  const resolved = require.resolve(modulePath);
+  const previous = require.cache[resolved];
+  require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: mockExports };
+  try {
+    return await fn();
+  } finally {
+    if (previous) {
+      require.cache[resolved] = previous;
+    } else {
+      delete require.cache[resolved];
+    }
+  }
+}
+
+function createMockDeliveryDb() {
+  let deliveries = [];
+  let attemptLogs = [];
+  let nextDeliveryId = 1;
+  let nextAttemptId = 1;
+
+  return {
+    _state: { deliveries, attemptLogs },
+    delivery: {
+      async create({ data }) {
+        const delivery = { id: nextDeliveryId++, attemptCount: 0, createdAt: new Date(), ...data };
+        deliveries.push(delivery);
+        return delivery;
+      },
+      async update({ where, data }) {
+        const delivery = deliveries.find((d) => d.id === where.id);
+        Object.assign(delivery, data);
+        return delivery;
+      },
+      async findUnique({ where }) {
+        return deliveries.find((d) => d.id === where.id) || null;
+      },
+    },
+    deliveryAttemptLog: {
+      async create({ data }) {
+        const log = { id: nextAttemptId++, attemptedAt: new Date(), ...data };
+        attemptLogs.push(log);
+        return log;
+      },
+    },
+  };
+}
+
+module.exports = {
+  withMockDb,
+  withMockModule,
+  freshRequire,
+  createMockDb,
+  createMockDeliveryDb,
+  fakeRes,
+  dbPath,
+  redisPath,
+};

@@ -1,3 +1,5 @@
+// backend/prisma/schema.prisma
+
 // WebhookHub - Prisma Schema (MySQL)
 // Two domains in one schema:
 //   1. Webhook delivery: Project -> ApiKey, Endpoint, Event, Delivery, DeliveryAttemptLog
@@ -40,15 +42,16 @@ enum JobStatus {
 }
 
 model User {
-  id           Int      @id @default(autoincrement())
-  name         String
-  email        String   @unique
-  passwordHash String
-  role         Role     @default(DEVELOPER)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id              Int       @id @default(autoincrement())
+  name            String
+  email           String    @unique
+  passwordHash    String
+  role            Role      @default(DEVELOPER)
+  emailVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  auditLogs    AuditLog[]
+  auditLogs       AuditLog[]
 
   @@map("users")
 }
@@ -71,7 +74,7 @@ model ApiKey {
   id         Int       @id @default(autoincrement())
   projectId  Int
   prefix     String    // shown in UI, e.g. "wh_live_8f2a"
-  keyHash    String    // bcrypt hash of the actual secret, never store plaintext
+  keyHash    String    // SHA-256 hash of the actual secret (not bcrypt - see ARCHITECTURE.md section 5 for why), never store plaintext
   label      String?
   lastUsedAt DateTime?
   expiresAt  DateTime?
@@ -84,15 +87,17 @@ model ApiKey {
 }
 
 model Endpoint {
-  id         Int      @id @default(autoincrement())
-  projectId  Int
-  url        String
-  description String?
-  secret     String   // used to HMAC-sign outgoing payloads; encrypt at rest
-  eventTypes String   @db.Text // JSON array of subscribed event types, "*" = all
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id             Int      @id @default(autoincrement())
+  projectId      Int
+  url            String
+  description    String?
+  secret         String   // used to HMAC-sign outgoing payloads; encrypt at rest
+  eventTypes     String   @db.Text // JSON array of subscribed event types, "*" = all
+  isActive       Boolean  @default(true)
+  maxRetries     Int      @default(8)    // per-endpoint override of the global retry ceiling
+  retryBackoffMs Int      @default(5000) // per-endpoint override of the exponential backoff base delay
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
   deliveries Delivery[]

@@ -1,0 +1,227 @@
+<USER_REQUEST>
+webhookhub/verify-files.sh
+ 
+!/bin/bash
+ Run this from your webhookhub repo root: bash verify-files.sh
+
+ Checks every file that should exist actually does, and flags anything
+ missing or suspiciously empty (under 50 bytes - real implementation
+ files in this project are all well over that). This exists specifically
+to settle "is a file actually missing, or did something else go wrong"
+ without more guessing.
+
+<!-- webhookhub/DEPLOY_TEST_PROMPT.md -->
+
+# WebhookHub — Pre-Deployment Test, Fix & Verify Prompt
+
+Paste this into an AI coding agent with real terminal and file access in the
+project root (Claude Code or similar). This is the final gate before
+deployment — be thorough, not fast.
+
+**Before you start:** confirm the project is committed to git (or otherwise
+backed up). This prompt authorizes you to modify code when you find real
+bugs — a clean revert point matters since you're making changes, not just
+reporting on them.
+
+---
+
+## Your role and operating rules
+
+You are doing final pre-deployment verification on a webhook delivery
+platform (Node/Express/Prisma/MySQL/Redis/BullMQ backend, React/Vite
+frontend). Test thoroughly, and when you find a genuine bug, fix it
+yourself, then re-verify the fix before moving on. Don't just log problems
+for someone else to solve.
+
+**Fix protocol, every time you find an issue:**
+1. Reproduce it first. Don't fix something you haven't confirmed.
+2. Find the actual root cause — read the relevant code, don't guess from
+   the symptom alone.
+3. Make the smallest correct fix. Do not delete or weaken a test, a
+   validation rule, or a security check to make something "pass" — if a
+   security control (SSRF blocking, RBAC, rate limiting, encryption,
+   signature verification) appears to be causing a test failure, the
+   default assumption is that the *test* is wrong, not the control. Flag
+   these specifically rather than touching the control.
+4. Re-run the specific failing test/check to confirm the fix actually
+   worked.
+5. Re-run the *full* automated suite (`npm test`) to confirm you didn't
+   break something else.
+6. Write down what was wrong and what you changed, in the final report.
+7. If the same issue resists three fix attempts, stop trying to patch
+   around it — report it clearly as unresolved instead of leaving the
+   codebase in a half-changed state.
+
+**Do not loosen anything to make tests pass**: not CORS to `*`, not rate
+limits, not the SSRF allowlist, not validation rules, not RBAC checks. If
+the fix you're tempted to make involves loosening a guardrail, stop and
+report instead of applying it.
+
+---
+
+## Phase 0 — File integrity (run this first, always)
+
+```bash
+bash verify-files.sh
+```
+
+If anything is reported missing or suspiciously empty, stop and resolve
+that before proceeding — testing against an incomplete checkout produces
+misleading results, as already happened once on this project. Cross-check
+`backend/package.json` actually lists every dependency imported anywhere
+in `backend/src` (grep for `require(` calls against `dependencies`) - a
+package used in code but missing from `package.json` is a deploy-time
+failure waiting to happen, even if it happens to be in `node_modules`
+locally right now.
+
+## Phase 1 — Environment & boot (backend)
+
+1. `cd backend && npm install && npx prisma generate && npx prisma migrate dev --name init`
+2. Confirm `.env` has real, non-placeholder values for `DATABASE_URL`,
+   `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ENV_ENCRYPTION_KEY` (exactly 32
+   chars), `REDIS_HOST`/`REDIS_PORT`. Generate and fill in anything missing.
+3. Confirm Redis is reachable and report its version (`redis-cli INFO server | grep redis_version`) - BullMQ needs >= 5.0.
+4. `npm run dev` — confirm clean boot, `GET /api/health` returns `200`.
+5. Send `SIGTERM` to the process — confirm clean shutdown (HTTP closed →
+   worker closed → DB closed → Redis closed) within a few seconds, not a
+   hang.
+
+## Phase 2 — Automated backend tests
+
+1. `npm test` — record the exact pass/fail count and confirm it's **52**,
+   not some smaller number (a smaller count means files from the
+   queue-worker/SSRF test suites are missing — go back to Phase 0).
+2. Confirm the process exits on its own, no hang.
+3. Run it a second time immediately and confirm identical results (no
+   state leaking between runs).
+
+## Phase 3 — Backend manual walkthrough
+
+Cover every one of these. Do not sample a few and assume the rest behave
+the same way — this is exactly the kind of assumption that lets a real bug
+through.
+
+**Auth & sessions**
+- Register first user → `ADMIN`. Register a second → `DEVELOPER`, even if
+  you try to pass `"role": "ADMIN"` in the body.
+- Duplicate email → `409`, not `500`.
+- Correct/incorrect login.
+- Logout, then reuse the same access token → rejected.
+- Forgot-password → find the token (server logs in dev mode) → reset →
+  confirm a token issued *before* the reset is now rejected, and a token
+  issued *after* the reset (even in the same second) still works.
+- Verify email with a valid token, then try reusing the same token again.
+
+**RBAC** — as `ADMIN`, `DEVELOPER`, and `VIEWER`, for every one of: project
+CRUD, endpoint CRUD + ping/regenerate-secret/replay-failed, API key
+create/revoke/regenerate, user list/role-update. Confirm an `ADMIN` cannot
+demote themselves.
+
+**SSRF** — reject `localhost`, `127.0.0.1`, `169.254.169.254`, `10.x`,
+`192.168.x`, `172.16-31.x` on both create and update. Confirm `172.15.x`
+and `172.32.x` are correctly *allowed* (boundary check, not just "is it
+blocked").
+
+**API keys** — create (full key shown once, never again), revoke (stops
+authenticating immediately), regenerate (old dead, new works), expired key
+rejected.
+
+**Event ingestion & delivery (the core path)**
+- Real event → fans out only to subscribed endpoints (exact type or `"*"`).
+- Reaches `SUCCESS` with correct status/latency/body recorded.
+- Same `Idempotency-Key` sent twice → second call returns the cached
+  result, doesn't create a second event.
+- Exhaust retries on a failing endpoint → `DEAD_LETTERED`, not stuck.
+  Replay it both via single-delivery replay and bulk replay-failed.
+- Burst past the per-key rate limit → `429` at the configured threshold.
+
+**Logs/pagination** — filter by status/endpoint/event-type/date range,
+individually and combined; pagination metadata accurate; `limit` capped
+even if a huge value is requested.
+
+## Phase 4 — Frontend, against the real backend (not mocked)
+
+1. `cd frontend && npm install && cp .env.example .env`, point it at the
+   real running backend, `npm run dev`.
+2. `npm run build` — confirm it succeeds with no errors.
+3. In an actual browser: register → login → create a project → create an
+   endpoint (try a blocked SSRF URL through the UI form and confirm the
+   error renders as readable text, not a raw stack trace or silent
+   failure) → create an API key → use that key from curl to send a real
+   event → watch the delivery appear and its status update **live**, with
+   no manual refresh.
+4. Log out, then try to access a dashboard URL directly — confirm redirect
+   to `/login`.
+5. Log in as a non-admin (use the role-management page to demote a test
+   account first) and confirm admin-only nav items and buttons are
+   genuinely absent, not just visually disabled.
+6. Open devtools console during normal navigation (not just first load) —
+   report any errors or warnings.
+7. Resize to a narrow/mobile width and note what breaks, if anything.
+
+## Phase 5 — Integration correctness
+
+- Confirm the frontend's token-refresh actually works: log in, then
+  manually edit `localStorage`'s access token to garbage while leaving the
+  refresh token intact, trigger a request, confirm it transparently
+  recovers instead of bouncing to login.
+- Confirm Socket.IO real-time updates work through the actual UI (not just
+  a raw socket client) — a delivery's status badge should change without
+  a page reload as the backend worker processes it.
+
+## Phase 6 — Deployment-readiness specifics
+
+This is the part that's easy to skip and expensive to get wrong in
+production:
+
+- `ALLOWED_ORIGINS` is set to the real frontend domain, not `localhost`,
+  in whatever env file will actually be used for deployment.
+- `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ENV_ENCRYPTION_KEY` for the target
+  deployment are **different values** than what's in local `.env` -
+  confirm this is documented somewhere, not just assumed.
+- `NODE_ENV=production` actually changes behavior where it should (error
+  messages don't leak stack traces to clients - check the global error
+  handler specifically).
+- `.env` files are git-ignored and were never committed
+  (`git log --all --full-history -- backend/.env frontend/.env`).
+- MySQL user for production has only the privileges this app needs, not
+  root/admin.
+- Redis is not exposed to the public internet.
+- Run `node scripts/loadtest.js <realApiKey> <baseUrl> 30 20` against
+  whatever environment most resembles production and record real
+  requests/sec and p50/p90/p99 latency - not sandbox numbers.
+
+## Phase 7 — Code review pass
+
+Read the codebase, not just the parts exercised above:
+- Inconsistent validation/error-handling patterns between similar pieces
+  of code.
+- Errors swallowed silently when they shouldn't be, or internal detail
+  leaked to clients when it shouldn't be.
+- Obvious N+1 queries or missing indexes for the query patterns actually
+  used.
+- Does `ARCHITECTURE.md` still match the code as it exists today?
+
+---
+
+## Required final output
+
+### Fixed during this pass
+For each fix: what was broken, the actual root cause, what you changed,
+and confirmation the specific test plus the full suite both pass after.
+
+### Verified working (no changes needed)
+What you tested thoroughly and confirmed already correct - be specific,
+not just "auth works."
+
+### Known limitations (not fixed, by design or out of scope)
+Anything you found but deliberately didn't change, and why.
+
+### Deployment readiness: YES / NO
+A direct answer, not a hedge. If NO, the exact list of what's still
+blocking, ordered by what to fix first.
+
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-06-25T09:41:15+05:30.
+</ADDITIONAL_METADATA>

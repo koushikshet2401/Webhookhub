@@ -130,10 +130,37 @@ async function replayFailedForEndpoint(req, res) {
     include: { event: true, endpoint: true },
   });
 
-  const replayedIds = [];
-  for (const delivery of deadLettered) {
-    await replayOneDelivery(delivery);
-    replayedIds.push(delivery.id);
+  const replayedIds = deadLettered.map((d) => d.id);
+
+  if (replayedIds.length > 0) {
+    // 1. Bulk update all DB records at once
+    await prisma.delivery.updateMany({
+      where: { id: { in: replayedIds } },
+      data: { status: 'PENDING', attemptCount: 0, deadLetteredAt: null },
+    });
+
+    // 2. Bulk enqueue to the queue
+    const { enqueueDelivery } = require('../queues/webhookQueue');
+    const { decrypt } = require('../utils/crypto');
+    
+    // Enqueue in parallel using Promise.allSettled
+    const results = await Promise.allSettled(deadLettered.map(delivery => 
+      enqueueDelivery({
+        deliveryId: delivery.id,
+        projectId: delivery.endpoint.projectId,
+        endpointUrl: delivery.endpoint.url,
+        secret: decrypt(delivery.endpoint.secret),
+        payload: delivery.event.payload,
+        maxRetries: delivery.endpoint.retryMaxCount || 3,
+        retryBackoffMs: delivery.endpoint.retryBackoffMs || 1000
+      })
+    ));
+
+    const failedEnqueues = results.filter(r => r.status === 'rejected');
+    if (failedEnqueues.length > 0) {
+      logger.error('Some enqueues failed during bulk replay', { count: failedEnqueues.length, errors: failedEnqueues.map(f => f.reason) });
+      // In a more robust system we would revert the DB state for the failed ones here
+    }
   }
 
   await logAction({
