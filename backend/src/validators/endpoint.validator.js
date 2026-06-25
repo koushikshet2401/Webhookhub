@@ -27,4 +27,9 @@ const updateEndpointSchema = z.object({
   ...retryFields,
 });
 
-module.exports = { createEndpointSchema, updateEndpointSchema };
+const sendTestEventSchema = z.object({
+  eventType: z.string().min(1, 'eventType is required'),
+  payload: z.any()
+});
+
+module.exports = { createEndpointSchema, updateEndpointSchema, sendTestEventSchema };

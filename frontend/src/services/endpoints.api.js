@@ -11,4 +11,5 @@ export const endpointsApi = {
   regenerateSecret: (id) => api.post(`/endpoints/${id}/regenerate-secret`).then((r) => r.data),
   ping: (id) => api.post(`/endpoints/${id}/ping`).then((r) => r.data),
   replayFailed: (id) => api.post(`/endpoints/${id}/replay-failed`).then((r) => r.data),
+  sendTestEvent: (id, payload) => api.post(`/endpoints/${id}/send-test-event`, payload).then((r) => r.data),
 };

@@ -205,6 +205,66 @@ async function pingEndpoint(req, res) {
   }
 }
 
+async function sendTestEvent(req, res) {
+  const id = Number(req.params.id);
+  const { eventType, payload } = req.body;
+
+  const endpoint = await prisma.endpoint.findUnique({
+    where: { id },
+  });
+
+  if (!endpoint) {
+    return res.status(404).json({ error: 'Endpoint not found' });
+  }
+
+  // 1. Create Event
+  const event = await prisma.event.create({
+    data: {
+      projectId: endpoint.projectId,
+      eventType,
+      payload: JSON.stringify(payload),
+      sourceIp: 'dashboard-test',
+    },
+  });
+
+  // 2. Create Delivery
+  const delivery = await prisma.delivery.create({
+    data: {
+      eventId: event.id,
+      endpointId: endpoint.id,
+      status: 'PENDING',
+      maxAttempts: endpoint.maxRetries || 3,
+    },
+  });
+
+  // 3. Enqueue
+  const { enqueueDelivery } = require('../queues/webhookQueue');
+  await enqueueDelivery({
+    deliveryId: delivery.id,
+    projectId: endpoint.projectId,
+    endpointUrl: endpoint.url,
+    secret: decrypt(endpoint.secret),
+    eventType,
+    payload,
+    maxRetries: endpoint.maxRetries || 3,
+    retryBackoffMs: endpoint.retryBackoffMs || 1000,
+  });
+
+  // 4. Audit
+  await logAction({
+    userId: req.user.id,
+    action: 'endpoint.send_test_event',
+    targetType: 'Endpoint',
+    targetId: endpoint.id,
+    metadata: { eventId: event.id, deliveryId: delivery.id, eventType },
+  });
+
+  return res.status(202).json({
+    eventId: event.id,
+    deliveryId: delivery.id,
+  });
+}
+
 module.exports = {
   createEndpoint,
   listEndpoints,
@@ -213,4 +273,5 @@ module.exports = {
   deleteEndpoint,
   regenerateEndpointSecret,
   pingEndpoint,
+  sendTestEvent,
 };

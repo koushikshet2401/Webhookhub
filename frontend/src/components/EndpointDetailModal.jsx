@@ -8,6 +8,7 @@ import Input from './Input';
 import Button from './Button';
 import SecretReveal from './SecretReveal';
 import RoleGate from './RoleGate';
+import TestEventPanel from './TestEventPanel';
 
 export default function EndpointDetailModal({ open, onClose, endpoint, onUpdated, onDeleted }) {
   const [url, setUrl] = useState(endpoint?.url || '');
@@ -19,6 +20,7 @@ export default function EndpointDetailModal({ open, onClose, endpoint, onUpdated
   const [pingResult, setPingResult] = useState(null);
   const [regenerated, setRegenerated] = useState(null);
   const [busy, setBusy] = useState('');
+  const [showTestPanel, setShowTestPanel] = useState(false);
 
   if (!endpoint) return null;
 
@@ -118,9 +120,14 @@ export default function EndpointDetailModal({ open, onClose, endpoint, onUpdated
         <div className="border-t border-border pt-4 flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <span className="text-sm text-text-muted">Test connectivity</span>
-            <Button variant="secondary" size="sm" onClick={handlePing} loading={pinging}>
-              Send test ping
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setShowTestPanel(p => !p)}>
+                {showTestPanel ? 'Hide test event' : 'Send test event'}
+              </Button>
+              <Button variant="secondary" size="sm" onClick={handlePing} loading={pinging}>
+                Send test ping
+              </Button>
+            </div>
           </div>
           {pingResult && (
             <div className="text-xs">
@@ -153,6 +160,8 @@ export default function EndpointDetailModal({ open, onClose, endpoint, onUpdated
             </div>
           </RoleGate>
         </div>
+
+        {showTestPanel && <TestEventPanel endpoint={endpoint} />}
 
         <RoleGate allow={['ADMIN', 'DEVELOPER']}>
           <div className="border-t border-border pt-4">
