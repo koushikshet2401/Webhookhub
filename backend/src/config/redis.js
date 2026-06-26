@@ -14,6 +14,7 @@ connection.on('connect', () => {
 });
 
 connection.on('error', (err) => {
+  if (err.message.includes('ECONNRESET')) return;
   console.error('[redis] connection error:', err.message);
 });
 
