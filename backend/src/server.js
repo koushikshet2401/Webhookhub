@@ -44,7 +44,24 @@ app.use((req, res, next) => {
 app.use(helmet());
 app.use(
   cors({
-    origin: (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean),
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+        .split(',')
+        .map(s => s.trim().replace(/\/$/, ''))
+        .filter(Boolean);
+      
+      // Add default known origins to prevent lockouts
+      allowedOrigins.push('http://localhost:5174');
+      allowedOrigins.push('https://webhookhub-rho.vercel.app');
+
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.error(`[cors] Blocked origin: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
   })
 );
@@ -95,8 +112,15 @@ initSocket(server);
 
 // ---- Start server ----
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   logger.info('WebhookHub backend listening', { port: PORT, env: process.env.NODE_ENV });
+  console.log(`[server] Running on port ${PORT}`);
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    console.log('[database] connected');
+  } catch (err) {
+    console.error('[database] connection failed:', err.message);
+  }
 });
 
 // ---- Graceful shutdown ----
