@@ -69,6 +69,17 @@ app.use(morgan(process.env.NODE_ENV === 'development' ? 'dev' : 'combined'));
 app.use(cookieParser());
 app.use(express.json({ limit: process.env.MAX_REQUEST_BODY_SIZE || '512kb' }));
 
+// ---- Request Timeout ----
+// Prevents infinite spinners if the database silently drops connections
+app.use((req, res, next) => {
+  req.setTimeout(15000, () => {
+    const err = new Error('Request Timeout: The server took too long to respond (likely a database connection issue).');
+    err.status = 503;
+    next(err);
+  });
+  next();
+});
+
 // ---- Basic rate limiting ----
 const limiter = rateLimit({
   windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
