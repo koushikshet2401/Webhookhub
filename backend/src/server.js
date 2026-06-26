@@ -29,6 +29,8 @@ const { initSocket } = require('./sockets');
 const { worker, deliveryQueue, queueEvents } = require('./queues/webhookQueue'); // boots the queue + worker + queueEvents listeners
 
 const app = express();
+app.set('trust proxy', 1);
+
 const server = http.createServer(app);
 
 // ---- Request ID (for structured logging / tracing a request through logs) ----

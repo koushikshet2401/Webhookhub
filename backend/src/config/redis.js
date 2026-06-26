@@ -5,6 +5,8 @@ const connection = new Redis({
   port: Number(process.env.REDIS_PORT) || 6379,
   password: process.env.REDIS_PASSWORD || undefined,
   maxRetriesPerRequest: null, // required by BullMQ
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
 });
 
 connection.on('connect', () => {
