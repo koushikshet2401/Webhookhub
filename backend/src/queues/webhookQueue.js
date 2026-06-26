@@ -162,6 +162,7 @@ const worker = new Worker(QUEUE_NAME, processDeliveryJob, {
 });
 
 worker.on('error', (err) => {
+  if (err.message.includes('ECONNRESET')) return;
   // BullMQ Worker is an EventEmitter - an unhandled 'error' event crashes
   // the whole Node process, so this listener is not optional.
   logger.error('Queue worker error', { error: err.message });
@@ -220,6 +221,7 @@ worker.on('failed', handleJobFailed);
 const queueEvents = new QueueEvents(QUEUE_NAME, { connection });
 
 queueEvents.on('error', (err) => {
+  if (err.message.includes('ECONNRESET')) return;
   logger.error('Queue events error', { error: err.message });
 });
 
