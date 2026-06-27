@@ -12,6 +12,7 @@ const {
 } = require('../utils/tokenRevocation');
 const { sendMail } = require('../utils/mailer');
 const { createEmailVerificationToken, consumeEmailVerificationToken } = require('../utils/emailVerification');
+const logger = require('../utils/logger');
 
 async function register(req, res) {
   const { name, email, password } = req.body;
@@ -55,11 +56,15 @@ async function register(req, res) {
 
   const verificationToken = await createEmailVerificationToken(user.id);
   const verifyLink = `${process.env.FRONTEND_URL || 'http://localhost:5174'}/verify-email?token=${verificationToken}`;
-  await sendMail({
-    to: user.email,
-    subject: 'Verify your WebhookHub email',
-    text: `Welcome to WebhookHub!\n\nVerify your email: ${verifyLink}\n\nThis link expires in 24 hours.`,
-  });
+  try {
+    await sendMail({
+      to: user.email,
+      subject: 'Verify your WebhookHub email',
+      text: `Welcome to WebhookHub!\n\nVerify your email: ${verifyLink}\n\nThis link expires in 24 hours.`,
+    });
+  } catch (error) {
+    logger.error('Failed to send verification email during registration', { error: error.message, userId: user.id });
+  }
 
   const accessToken = await signAccessToken(user);
   const refreshToken = signRefreshToken(user);
@@ -138,11 +143,15 @@ async function forgotPassword(req, res) {
     const token = await createPasswordResetToken(user.id);
     const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:5174'}/reset-password?token=${token}`;
 
-    await sendMail({
-      to: user.email,
-      subject: 'Reset your WebhookHub password',
-      text: `Someone requested a password reset for this account.\n\nReset your password: ${resetLink}\n\nThis link expires in 1 hour. If you didn't request this, you can safely ignore this email.`,
-    });
+    try {
+      await sendMail({
+        to: user.email,
+        subject: 'Reset your WebhookHub password',
+        text: `Someone requested a password reset for this account.\n\nReset your password: ${resetLink}\n\nThis link expires in 1 hour. If you didn't request this, you can safely ignore this email.`,
+      });
+    } catch (error) {
+      logger.error('Failed to send password reset email', { error: error.message, userId: user.id });
+    }
 
     await logAction({ userId: user.id, action: 'user.password_reset_requested', targetType: 'User', targetId: user.id });
   }
@@ -202,11 +211,15 @@ async function resendVerification(req, res) {
 
   const token = await createEmailVerificationToken(user.id);
   const verifyLink = `${process.env.FRONTEND_URL || 'http://localhost:5174'}/verify-email?token=${token}`;
-  await sendMail({
-    to: user.email,
-    subject: 'Verify your WebhookHub email',
-    text: `Verify your email: ${verifyLink}\n\nThis link expires in 24 hours.`,
-  });
+  try {
+    await sendMail({
+      to: user.email,
+      subject: 'Verify your WebhookHub email',
+      text: `Verify your email: ${verifyLink}\n\nThis link expires in 24 hours.`,
+    });
+  } catch (error) {
+    logger.error('Failed to resend verification email', { error: error.message, userId: user.id });
+  }
 
   return res.json({ message: 'Verification email sent' });
 }
